@@ -13,7 +13,7 @@ module.exports = async (req, res) => {
 
         // שלב ב: בקשת גיל (שולחים שוב את ה-userId כדי לשמור עליו)
         if (!userAge) {
-            return res.status(200).send(`read=t-נא הקש את גילך=user_age,no,1,3,7,Digits&user_id=${userId}`);
+            return res.status(200).send(`read=t-נא הקש את גילך=user_age,no,3,1,7,Digits&user_id=${userId}`);
         }
 
         // שלב ג: סיום
