@@ -4,6 +4,9 @@ module.exports = async (req, res) => {
     const TABLE_NAME = 'Table 1';
     const LOG_TABLE = 'Logs';
 
+    // מניעת שמירה בזיכרון (Cache) - חשוב מאוד לימות המשיח
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
     try {
         const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
         const params = Object.fromEntries(searchParams);
@@ -14,47 +17,49 @@ module.exports = async (req, res) => {
         const phone = params.ApiPhone || '000';
         const editMode = params.edit_mode;
 
-        // שלב א: בקשת תעודת זהות
+        // שלב 1: בקשת תעודת זהות
         if (!userId) {
             return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
         }
 
-        // שלב ב: חיפוש משתמש ב-Airtable
+        // שלב 2: חיפוש משתמש קיים לפי ת"ז
         let userRecordId = null;
+        let existingAge = null;
+
         const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
         const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
         const searchData = await searchRes.json();
-        const foundRecord = searchData.records && searchData.records[0];
+        
+        if (searchData.records && searchData.records.length > 0) {
+            userRecordId = searchData.records[0].id;
+            existingAge = searchData.records[0].fields.Age;
+        }
 
-        if (foundRecord) {
-            userRecordId = foundRecord.id;
-            // אם המשתמש קיים ויש לו גיל, ועדיין לא בחרנו לערוך
-            if (foundRecord.fields.Age && !userAge && !editMode) {
-                const age = foundRecord.fields.Age;
-                // שימוש בנקודה כמפריד בין סוגי נתונים: t ל-n וכו'
-                return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${age}.t-לעדכון הגיל הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
-            }
+        // אם המשתמש קיים ויש לו גיל, ועדיין לא בחרנו לערוך
+        if (userRecordId && existingAge && !userAge && !editMode) {
+            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-לעדכון הגיל הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
         }
 
         // יציאה
-        if (editMode === '') return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
+        if (editMode === '') {
+            return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
+        }
 
-        // שלב ג: בקשת גיל
+        // שלב 3: בקשת גיל (לחדש או למעדכן)
         if (!userAge) {
             return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}`);
         }
 
-        // שלב ד: שמירה סופית (עם await לוודא כתיבה לפני סיום)
+        // שלב 4: שמירה/עדכון בטבלה הראשית
+        // אם מצאנו userRecordId - זה יבצע PATCH (עדכון). אם לא - POST (חדש).
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
         
-        // לוג הצלחה
-        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { phone, Action: "Success", Details: `ID: ${userId} Age: ${userAge}` });
+        // שמירת לוג (תמיד שורה חדשה בטבלת לוגים)
+        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { phone, Action: "Success", Details: `ID: ${userId} Age: ${userAge} Mode: ${userRecordId ? 'Update' : 'New'}` });
 
-        // הודעת סיום עם פורמט נקודות תקני
         return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נרשמו בהצלחה.t-תודה ולהתראות&hangup=yes`);
 
     } catch (error) {
-        console.error("Global Error:", error);
         return res.status(200).send("id_list_message=t-חלה שגיאה במערכת הרישום&hangup=yes");
     }
 };
