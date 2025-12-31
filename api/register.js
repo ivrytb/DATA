@@ -17,8 +17,8 @@ module.exports = async (req, res) => {
         }
 
         // --- כאן מדביקים את הנתונים שהוצאת ---
-        const AIRTABLE_TOKEN = 'pat... המפתח הסודי שלך'; 
-        const BASE_ID = 'app... המזהה של הבייס';
+        const AIRTABLE_TOKEN = 'patiuDWzuJf42NoCY.ca145e8a5b0551c953e6916ffdb1b25bb26b88cf072aac3c1ba6cb8674adce98'; 
+        const BASE_ID = 'appNw4gVE9L38s6mD';
         const TABLE_NAME = 'Table 1'; // וודא שזה השם המדויק
 
         const airtableUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}`;
