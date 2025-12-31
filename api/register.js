@@ -1,6 +1,3 @@
-// --- שלב ג: הגדרות Airtable (החלף כאן את הנתונים שלך) ---
-  
-
 module.exports = async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
