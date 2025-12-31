@@ -11,7 +11,6 @@ module.exports = async (req, res) => {
         const params = Object.fromEntries(searchParams);
         if (req.body) Object.assign(params, req.body);
 
-        // ניקוי נתונים: הסרת רווחים מיותרים
         const userId = params.user_id ? String(params.user_id).trim() : null;
         const userAge = params.user_age ? String(params.user_age).trim() : null;
         const phone = (params.ApiPhone || '000').trim();
@@ -21,23 +20,37 @@ module.exports = async (req, res) => {
             return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
         }
 
-        // שלב החיפוש - הוספנו trim גם בתוך הנוסחה של Airtable
+        // --- שלב החיפוש הקריטי ---
         let userRecordId = null;
         let existingAge = null;
 
-        const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula=TRIM({ID})='${userId}'`;
+        // שאילתה פשוטה יותר ללא פונקציות מורכבות כדי לשלול בעיות תחביר
+        const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
         
-        const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
+        const searchRes = await fetch(searchUrl, { 
+            headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } 
+        });
+        
         const searchData = await searchRes.json();
-        
-        if (searchData.records && searchData.records.length > 0) {
-            userRecordId = searchData.records[0].id;
-            existingAge = searchData.records[0].fields.Age;
+
+        // בדיקה אם Airtable החזיר שגיאה (למשל 401 או 403)
+        if (searchData.error) {
+            await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+                phone, Action: "API_ERROR", Details: `Code: ${searchData.error.type}, Msg: ${searchData.error.message}` 
+            });
+        } else {
+            // לוג זיהוי לחיפוש מוצלח/לא מוצלח
+            await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+                phone, Action: "Search_Attempt", Details: `ID: ${userId}, Found: ${searchData.records?.length > 0}` 
+            });
+
+            if (searchData.records && searchData.records.length > 0) {
+                userRecordId = searchData.records[0].id;
+                existingAge = searchData.records[0].fields.Age;
+            }
         }
 
-        // לוג לצורך בדיקה - האם החיפוש מצא משהו?
-        console.log(`Search result for ${userId}: ${userRecordId ? 'Found' : 'Not Found'}`);
-
+        // --- לוגיקה של ימות המשיח ---
         if (userRecordId && existingAge && !userAge && !editMode) {
             return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-לעדכון הגיל הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
         }
@@ -51,17 +64,13 @@ module.exports = async (req, res) => {
         // שמירה/עדכון
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
         
-        // לוג הצלחה
         await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
-            phone, 
-            Action: "Success", 
-            Details: `ID: ${userId} Age: ${userAge} Mode: ${userRecordId ? 'Update' : 'New'}` 
+            phone, Action: "Success", Details: `ID: ${userId} Age: ${userAge} Mode: ${userRecordId ? 'Update' : 'New'}` 
         });
 
         return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נרשמו בהצלחה.t-תודה ולהתראות&hangup=yes`);
 
     } catch (error) {
-        console.error("Error:", error);
         return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
     }
 };
@@ -69,7 +78,6 @@ module.exports = async (req, res) => {
 async function upsertData(token, baseId, tableName, data, recordId) {
     const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tableName)}${recordId ? '/' + recordId : ''}`;
     const method = recordId ? 'PATCH' : 'POST';
-    
     const fields = {};
     if (data.userId) fields["ID"] = String(data.userId);
     if (data.userAge) fields["Age"] = String(data.userAge);
@@ -79,7 +87,7 @@ async function upsertData(token, baseId, tableName, data, recordId) {
 
     const body = recordId ? { fields } : { records: [{ fields }] };
 
-    await fetch(url, {
+    return fetch(url, {
         method,
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
