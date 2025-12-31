@@ -4,7 +4,6 @@ module.exports = async (req, res) => {
     const TABLE_NAME = 'Table 1';
     const LOG_TABLE = 'Logs';
 
-    // מניעת שמירה בזיכרון (Cache) - חשוב מאוד לימות המשיח
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
     try {
@@ -12,21 +11,22 @@ module.exports = async (req, res) => {
         const params = Object.fromEntries(searchParams);
         if (req.body) Object.assign(params, req.body);
 
-        const userId = params.user_id;
-        const userAge = params.user_age;
-        const phone = params.ApiPhone || '000';
+        // ניקוי נתונים: הסרת רווחים מיותרים
+        const userId = params.user_id ? String(params.user_id).trim() : null;
+        const userAge = params.user_age ? String(params.user_age).trim() : null;
+        const phone = (params.ApiPhone || '000').trim();
         const editMode = params.edit_mode;
 
-        // שלב 1: בקשת תעודת זהות
         if (!userId) {
             return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
         }
 
-        // שלב 2: חיפוש משתמש קיים לפי ת"ז
+        // שלב החיפוש - הוספנו trim גם בתוך הנוסחה של Airtable
         let userRecordId = null;
         let existingAge = null;
 
-        const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
+        const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula=TRIM({ID})='${userId}'`;
+        
         const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
         const searchData = await searchRes.json();
         
@@ -35,32 +35,34 @@ module.exports = async (req, res) => {
             existingAge = searchData.records[0].fields.Age;
         }
 
-        // אם המשתמש קיים ויש לו גיל, ועדיין לא בחרנו לערוך
+        // לוג לצורך בדיקה - האם החיפוש מצא משהו?
+        console.log(`Search result for ${userId}: ${userRecordId ? 'Found' : 'Not Found'}`);
+
         if (userRecordId && existingAge && !userAge && !editMode) {
             return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-לעדכון הגיל הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
         }
 
-        // יציאה
-        if (editMode === '') {
-            return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
-        }
+        if (editMode === '') return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
 
-        // שלב 3: בקשת גיל (לחדש או למעדכן)
         if (!userAge) {
             return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}`);
         }
 
-        // שלב 4: שמירה/עדכון בטבלה הראשית
-        // אם מצאנו userRecordId - זה יבצע PATCH (עדכון). אם לא - POST (חדש).
+        // שמירה/עדכון
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
         
-        // שמירת לוג (תמיד שורה חדשה בטבלת לוגים)
-        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { phone, Action: "Success", Details: `ID: ${userId} Age: ${userAge} Mode: ${userRecordId ? 'Update' : 'New'}` });
+        // לוג הצלחה
+        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+            phone, 
+            Action: "Success", 
+            Details: `ID: ${userId} Age: ${userAge} Mode: ${userRecordId ? 'Update' : 'New'}` 
+        });
 
         return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נרשמו בהצלחה.t-תודה ולהתראות&hangup=yes`);
 
     } catch (error) {
-        return res.status(200).send("id_list_message=t-חלה שגיאה במערכת הרישום&hangup=yes");
+        console.error("Error:", error);
+        return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
     }
 };
 
@@ -77,10 +79,9 @@ async function upsertData(token, baseId, tableName, data, recordId) {
 
     const body = recordId ? { fields } : { records: [{ fields }] };
 
-    const res = await fetch(url, {
+    await fetch(url, {
         method,
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-    return res.json();
 }
