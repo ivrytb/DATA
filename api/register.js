@@ -15,7 +15,7 @@ module.exports = async (req, res) => {
         // שלב ב: בקשת גיל
         if (!userAge) {
             // המערכת כבר צברה את user_id ותשלח אותו שוב אוטומטית
-            return res.status(200).send("read=t-נא הקש גיל ובסיומו סולמית=user_age,,1,3,Digits,yes");
+            return res.status(200).send("read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,1,Digits,yes");
         }
 
         // שלב ג: סיום - קבלת שני הפרמטרים
