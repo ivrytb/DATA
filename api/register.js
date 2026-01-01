@@ -1,14 +1,7 @@
 const nodemailer = require('nodemailer');
 
 module.exports = async (req, res) => {
-    // טעינת משתנים
-    const {
-        AIRTABLE_TOKEN,
-        BASE_ID,
-        EMAIL_USER,
-        EMAIL_PASS
-    } = process.env;
-    
+    const { AIRTABLE_TOKEN, BASE_ID, EMAIL_USER, EMAIL_PASS } = process.env;
     const TABLE_NAME = 'Table 1';
     const LOG_TABLE = 'Logs';
 
@@ -23,56 +16,62 @@ module.exports = async (req, res) => {
         const userAge = params.user_age ? String(params.user_age).trim() : null;
         const phone = (params.ApiPhone || '000').trim();
 
-        if (!userId) return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
+        // שלב 1: בקשת תעודת זהות
+        if (!userId) {
+            return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
+        }
 
-        // שלב חיפוש
+        // --- לוג: ניסיון חיפוש ---
+        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+            phone, Action: "Search_Attempt", Details: `Searching for ID: ${userId}` 
+        });
+
+        // שלב 2: חיפוש משתמש ב-Airtable (כדי למנוע כפילויות)
+        let userRecordId = null;
+        let existingAge = null;
+
         const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
         const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
         const searchData = await searchRes.json();
-        let userRecordId = searchData.records?.[0]?.id;
 
-        // יצירה ראשונית אם לא קיים
-        if (!userRecordId) {
-            const createRes = await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge: "בתהליך" });
-            const newData = await createRes.json();
-            userRecordId = newData.id;
+        if (searchData.records && searchData.records.length > 0) {
+            userRecordId = searchData.records[0].id; // מצאנו משתמש קיים
+            existingAge = searchData.records[0].fields.Age;
         }
 
-        if (!userAge) return res.status(200).send(`read=t-נא הקש גיל=user_age,,3,0,Digits,yes&user_id=${userId}`);
+        // שלב 3: בקשת גיל (אם עדיין אין לנו גיל בפרמטרים)
+        if (!userAge) {
+            return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}`);
+        }
 
-        // עדכון סופי - מחכים לו!
+        // שלב 4: עדכון או יצירה (Upsert)
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
-        
-        // שליחת מייל - הוספתי await כדי לוודא שזה לא "נחתך" באמצע
+
+        // שלב 5: שליחת מייל עדכון
         try {
-            await sendSingleNotification(EMAIL_USER, EMAIL_PASS, { userId, userAge, phone });
-            console.log("Email sent successfully");
-        } catch (e) {
-            console.log("Email Error: " + e.message);
+            const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: EMAIL_USER, pass: EMAIL_PASS } });
+            await transporter.sendMail({
+                from: EMAIL_USER,
+                to: EMAIL_USER,
+                subject: `✅ ${userRecordId ? 'עדכון' : 'רישום'} חדש: ${userId}`,
+                text: `בוצע ${userRecordId ? 'עדכון' : 'רישום'}:\nת"ז: ${userId}\nגיל: ${userAge}\nטלפון: ${phone}`
+            });
+        } catch (mailErr) {
+            console.error("Mail Error:", mailErr.message);
         }
 
-        // כתיבת לוג - הוספתי await
+        // לוג הצלחה סופי
         await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
-            phone, Action: "Success", Details: `ID: ${userId} Age: ${userAge}` 
+            phone, Action: "Success", Details: `ID: ${userId} Registered with age ${userAge}` 
         });
 
-        return res.status(200).send(`id_list_message=t-נרשם בהצלחה&hangup=yes`);
+        return res.status(200).send(`id_list_message=t-הנתונים נשמרו בהצלחה&hangup=yes`);
 
     } catch (error) {
         console.error("Global Error:", error.message);
-        return res.status(200).send("id_list_message=t-תקלה במערכת&hangup=yes");
+        return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
     }
 };
-
-async function sendSingleNotification(user, pass, info) {
-    const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user, pass } });
-    return transporter.sendMail({
-        from: user,
-        to: user,
-        subject: `✅ רישום חדש: ${info.userId}`,
-        text: `ת"ז: ${info.userId}, גיל: ${info.userAge}, טלפון: ${info.phone}`
-    });
-}
 
 async function upsertData(token, baseId, tableName, data, recordId) {
     const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tableName)}${recordId ? '/' + recordId : ''}`;
