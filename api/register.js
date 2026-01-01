@@ -1,7 +1,5 @@
-const nodemailer = require('nodemailer');
-
 module.exports = async (req, res) => {
-    const { AIRTABLE_TOKEN, BASE_ID, EMAIL_USER, EMAIL_PASS } = process.env;
+    const { AIRTABLE_TOKEN, BASE_ID } = process.env;
     const TABLE_NAME = 'Table 1';
     const LOG_TABLE = 'Logs';
 
@@ -15,17 +13,17 @@ module.exports = async (req, res) => {
         const userId = params.user_id ? String(params.user_id).trim() : null;
         const userAge = params.user_age ? String(params.user_age).trim() : null;
         const phone = (params.ApiPhone || '000').trim();
-        const editMode = params.edit_mode;
+        const editChoice = params.edit_choice; // 1 = להשאיר, 2 = לשנות
+        const confirmChoice = params.confirm_choice; // 1 = אישור, 2 = תיקון
 
         // שלב 1: בקשת תעודת זהות
         if (!userId) {
             return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
         }
 
-        // שלב 2: חיפוש משתמש קיים
+        // חיפוש משתמש
         let userRecordId = null;
         let existingAge = null;
-
         const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
         const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_TOKEN}` } });
         const searchData = await searchRes.json();
@@ -35,64 +33,55 @@ module.exports = async (req, res) => {
             existingAge = searchData.records[0].fields.Age;
         }
 
-        // --- לוג ניסיון חיפוש ---
-        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
-            phone, Action: "Search_Attempt", Details: `ID: ${userId} (Found: ${!!userRecordId})` 
-        });
-
-        // שלב 3: תפריט עריכה (רק אם המשתמש קיים ויש לו גיל, ועדיין לא הקיש גיל חדש)
-        if (existingAge && !userAge && !editMode) {
-            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-לעדכון הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
+        // שלב 2: תפריט בחירה למשתמש קיים
+        if (existingAge && !editChoice && !userAge) {
+            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-להשארת הגיל הקישו 1.t-לשינוי הקישו 2=edit_choice,,1,1,1-2,yes&user_id=${userId}`);
         }
 
-        // אם המשתמש בחר לצאת (הקיש סולמית או לא הקיש 1)
-        if (editMode === '') {
-            return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
+        // שלב 3: אישור הבחירה
+        if (editChoice && !confirmChoice && !userAge) {
+            const text = editChoice === '1' ? `t-בחרת להשאיר את הגיל הקיים.` : `t-בחרת לשנות את הגיל.`;
+            // הגבלת מקשים ל-1 ו-2 בלבד
+            return res.status(200).send(`read=${text}t-לאישור הקישו 1.t-לתיקון הבחירה הקישו 2=confirm_choice,,1,1,1-2,yes&user_id=${userId}&edit_choice=${editChoice}`);
         }
 
-        // שלב 4: בקשת גיל (אם חדש או אם בחר לעדכן)
+        // חזרה לתפריט קודם אם בחר "תיקון"
+        if (confirmChoice === '2') {
+            return res.status(200).send(`read=t-נא לבחור שוב=edit_choice,,1,1,1-2,yes&user_id=${userId}`);
+        }
+
+        // שלב 4: טיפול בבחירה "להשאיר" (אישור סופי)
+        if (editChoice === '1' && confirmChoice === '1') {
+            await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+                phone, Action: "Keep_Existing", Details: `User ID ${userId} kept age ${existingAge}` 
+            });
+            // הודעה ברורה לפני ניתוק
+            return res.status(200).send("id_list_message=t-הגיל נשמר ללא שינוי. תודה ולהתראות&hangup=yes");
+        }
+
+        // שלב 5: בקשת גיל (למשתמש חדש או למי שבחר לשנות)
         if (!userAge) {
-            return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}`);
+            return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}&edit_choice=${editChoice}&confirm_choice=${confirmChoice}`);
         }
 
-        // שלב 5: עדכון סופי ב-Airtable
+        // שלב 6: שמירה סופית
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
-
-        // שלב 6: שליחת מייל - הועבר לפני סיום הפעולה
-        try {
-            const transporter = nodemailer.createTransport({
-                host: "smtp.gmail.com",
-                port: 465,
-                secure: true,
-                auth: { user: EMAIL_USER, pass: EMAIL_PASS }
-            });
-
-            // בדיקת חיבור (רק בשביל הלוג)
-            await transporter.verify();
-
-            await transporter.sendMail({
-                from: `"מערכת רישום" <${EMAIL_USER}>`,
-                to: EMAIL_USER,
-                subject: `🔔 ${userRecordId ? 'עדכון' : 'רישום'} חדש: ${userId}`,
-                text: `בוצע ${userRecordId ? 'עדכון' : 'רישום'}:\nת"ז: ${userId}\nגיל: ${userAge}\nטלפון: ${phone}`
-            });
-            console.log("Email sent successfully!");
-        } catch (mErr) {
-            // כאן זה יכתוב ללוג של ורסל בדיוק מה הבעיה
-            console.error("Critical Mail Error:", mErr.message);
-        }
-
-        // לוג הצלחה ב-Airtable
+        
         await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
-            phone, Action: "Success", Details: `ID: ${userId} Registered with age ${userAge}` 
+            phone, Action: "Success", Details: `ID: ${userId} Registered/Updated with age ${userAge}` 
         });
 
-        // רק עכשיו מחזירים תשובה לימות המשיח
-        return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נשמרו בהצלחה&hangup=yes`);
-        
+        return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נשמרו בהצלחה. תודה ולהתראות&hangup=yes`);
+
     } catch (error) {
-        console.error("Global Error:", error.message);
-        return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
+        // לוג שגיאות ל-Airtable
+        try {
+            await upsertData(process.env.AIRTABLE_TOKEN, process.env.BASE_ID, LOG_TABLE, { 
+                phone: "ERROR", Action: "System_Error", Details: error.message 
+            });
+        } catch (e) {}
+        
+        return res.status(200).send("id_list_message=t-חלה שגיאה במערכת. נא לנסות שוב מאוחר יותר&hangup=yes");
     }
 };
 
