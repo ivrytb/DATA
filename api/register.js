@@ -18,7 +18,7 @@ module.exports = async (req, res) => {
 
         // שלב 1: בקשת תעודת זהות
         if (!userId) {
-            return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
+            return res.status(200).send("read=t-אנא הקישו את תעודת הזהות שלכם=user_id,,9,9,Digits,yes");
         }
 
         // חיפוש משתמש
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
 
         // שלב 2: תפריט בחירה למשתמש קיים
         if (existingAge && !editChoice && !userAge) {
-            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-להשארת הגיל הקישו 1.t-לשינוי הקישו 2=edit_choice,,1,1,1-2,yes&user_id=${userId}`);
+            return res.status(200).send(`read=t-תעודת זהות זו כבר רשומה, הגיל הוא.n-${existingAge}.t-להשארת הגיל ללא שינוי, הקישו 1.t-לשינוי הקישו 2=edit_choice,,1,1,7,NO,yes,yes,,12,3,Ok,,,no&user_id=${userId}`);
         }
 
         // שלב 3: אישור הבחירה
