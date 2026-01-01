@@ -16,11 +16,12 @@ module.exports = async (req, res) => {
         const editChoice = params.edit_choice; 
         const confirmChoice = params.confirm_choice; 
 
-        // 1. תעודת זהות - שומעים את ההקשה לווידוא
+        // 1. שלב תעודת זהות - מבנה פשוט שעובד תמיד
         if (!userId) {
-            return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,8,7,TeudatZehut,yes");
+            return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,8,7,Digits,yes");
         }
 
+        // חיפוש ב-Airtable
         let userRecordId = null;
         let existingAge = null;
         const searchUrl = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TABLE_NAME)}?filterByFormula={ID}='${userId}'`;
@@ -32,19 +33,21 @@ module.exports = async (req, res) => {
             existingAge = searchData.records[0].fields.Age;
         }
 
-        // 2. תפריט בחירה - ערך 6 הוא NO (לא רוצים לשמוע "אחת" או "שתים")
+        // 2. תפריט בחירה (להשאיר 1 או לשנות 2)
+        // שים לב: צמצמתי פסיקים למינימום ההכרחי
         if (existingAge && !editChoice && !userAge) {
-            return res.status(200).send(`read=t-תעודת זהות זו כבר רשומה במערכת. המערכת מזהה שהגיל הוא.n-${existingAge}.t-, להשארת הגיל ללא שינוי הקישו.n-1.t-, לשינוי הגיל הקישו.n-2=edit_choice,yes,1,1,7,NO,no,no,,12,3,Ok,,,no&user_id=${userId}`);
+            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-, להשארת הגיל הקישו 1. לשינוי הקישו 2=edit_choice,,1,1,7,NO,yes&user_id=${userId}`);
         }
 
-        // 3. אישור בחירה - ערך 6 הוא NO
+        // 3. אישור בחירה
         if (editChoice && !confirmChoice && !userAge) {
-            const actionText = editChoice === '1' ? `t-להשארת הגיל הקיים.` : `t-לשינוי הגיל.`;
-            return res.status(200).send(`read=t-בחרת.n-${editChoice}.${actionText}.t- לאישור הבחירה הקישו.n-1.t-. לתיקון ובחירה מחדש הקישו.n-2=confirm_choice,yes,1,1,7,NO,no,no,,12,3,Ok,,,no&user_id=${userId}&edit_choice=${editChoice}`);
+            const actionText = editChoice === '1' ? `t-להשארת הגיל.` : `t-לשינוי הגיל.`;
+            return res.status(200).send(`read=t-בחרת.n-${editChoice}.${actionText}.t- לאישור הקישו 1. לתיקון הקישו 2=confirm_choice,,1,1,7,NO,yes&user_id=${userId}&edit_choice=${editChoice}`);
         }
 
+        // חזרה לתיקון
         if (confirmChoice === '2') {
-            return res.status(200).send(`read=t-נא לבחור שוב. להשארת הגיל הקישו.n-1.t-. לשינוי הקישו.n-2=edit_choice,yes,1,1,7,NO,no,no,,12,3,Ok,,,no&user_id=${userId}`);
+            return res.status(200).send(`read=t-נא לבחור שוב=edit_choice,,1,1,7,NO,yes&user_id=${userId}`);
         }
 
         // סיום ללא שינוי
@@ -53,19 +56,18 @@ module.exports = async (req, res) => {
             return res.status(200).send("id_list_message=t-הגיל נשמר ללא שינוי. תודה ולהתראות&hangup=yes");
         }
 
-        // 4. הקשת גיל - ערך 6 הוא Digits (כן רוצים לוודא מה הוקש)
+        // 4. הקשת גיל
         if (!userAge) {
-            return res.status(200).send(`read=t-נא הקש את הגיל המעודכן ובסיומו סולמית=user_age,yes,3,1,7,Digits,no,no,,,,,no&user_id=${userId}&edit_choice=${editChoice}&confirm_choice=${confirmChoice}`);
+            return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,1,7,Digits,yes&user_id=${userId}&edit_choice=${editChoice}&confirm_choice=${confirmChoice}`);
         }
 
         // 5. שמירה סופית
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
-        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { phone, Action: "Success", Details: `ID: ${userId} Updated to ${userAge}` });
+        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { phone, Action: "Success", Details: `ID: ${userId} Updated` });
 
-        return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נרשמו בהצלחה. תודה ולהתראות&hangup=yes`);
+        return res.status(200).send(`id_list_message=t-הנתונים נשמרו בהצלחה. תודה ולהתראות&hangup=yes`);
 
     } catch (error) {
-        try { await upsertData(process.env.AIRTABLE_TOKEN, process.env.BASE_ID, LOG_TABLE, { phone: "ERROR", Action: "System_Error", Details: error.message }); } catch (e) {}
         return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
     }
 };
