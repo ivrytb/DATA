@@ -58,14 +58,17 @@ module.exports = async (req, res) => {
         // שלב 5: עדכון סופי ב-Airtable
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
 
-        // שלב 6: שליחת מייל
+        // שלב 6: שליחת מייל - הועבר לפני סיום הפעולה
         try {
             const transporter = nodemailer.createTransport({
                 host: "smtp.gmail.com",
                 port: 465,
-                secure: true, // שימוש ב-SSL
+                secure: true,
                 auth: { user: EMAIL_USER, pass: EMAIL_PASS }
             });
+
+            // בדיקת חיבור (רק בשביל הלוג)
+            await transporter.verify();
 
             await transporter.sendMail({
                 from: `"מערכת רישום" <${EMAIL_USER}>`,
@@ -73,17 +76,20 @@ module.exports = async (req, res) => {
                 subject: `🔔 ${userRecordId ? 'עדכון' : 'רישום'} חדש: ${userId}`,
                 text: `בוצע ${userRecordId ? 'עדכון' : 'רישום'}:\nת"ז: ${userId}\nגיל: ${userAge}\nטלפון: ${phone}`
             });
+            console.log("Email sent successfully!");
         } catch (mErr) {
-            console.log("Mail Error Details:", mErr.message);
+            // כאן זה יכתוב ללוג של ורסל בדיוק מה הבעיה
+            console.error("Critical Mail Error:", mErr.message);
         }
 
-        // לוג הצלחה
+        // לוג הצלחה ב-Airtable
         await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
             phone, Action: "Success", Details: `ID: ${userId} Registered with age ${userAge}` 
         });
 
+        // רק עכשיו מחזירים תשובה לימות המשיח
         return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נשמרו בהצלחה&hangup=yes`);
-
+        
     } catch (error) {
         console.error("Global Error:", error.message);
         return res.status(200).send("id_list_message=t-חלה שגיאה במערכת&hangup=yes");
