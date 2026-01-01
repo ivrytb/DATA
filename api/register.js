@@ -15,18 +15,14 @@ module.exports = async (req, res) => {
         const userId = params.user_id ? String(params.user_id).trim() : null;
         const userAge = params.user_age ? String(params.user_age).trim() : null;
         const phone = (params.ApiPhone || '000').trim();
+        const editMode = params.edit_mode;
 
         // שלב 1: בקשת תעודת זהות
         if (!userId) {
             return res.status(200).send("read=t-נא הקש תעודת זהות ובסיומה סולמית=user_id,,9,9,Digits,yes");
         }
 
-        // --- לוג: ניסיון חיפוש ---
-        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
-            phone, Action: "Search_Attempt", Details: `Searching for ID: ${userId}` 
-        });
-
-        // שלב 2: חיפוש משתמש ב-Airtable (כדי למנוע כפילויות)
+        // שלב 2: חיפוש משתמש קיים
         let userRecordId = null;
         let existingAge = null;
 
@@ -35,37 +31,58 @@ module.exports = async (req, res) => {
         const searchData = await searchRes.json();
 
         if (searchData.records && searchData.records.length > 0) {
-            userRecordId = searchData.records[0].id; // מצאנו משתמש קיים
+            userRecordId = searchData.records[0].id;
             existingAge = searchData.records[0].fields.Age;
         }
 
-        // שלב 3: בקשת גיל (אם עדיין אין לנו גיל בפרמטרים)
+        // --- לוג ניסיון חיפוש ---
+        await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
+            phone, Action: "Search_Attempt", Details: `ID: ${userId} (Found: ${!!userRecordId})` 
+        });
+
+        // שלב 3: תפריט עריכה (רק אם המשתמש קיים ויש לו גיל, ועדיין לא הקיש גיל חדש)
+        if (existingAge && !userAge && !editMode) {
+            return res.status(200).send(`read=t-תעודת זהות זו רשומה עם גיל.n-${existingAge}.t-לעדכון הקישו 1.t-ליציאה הקישו סולמית=edit_mode,,1,1,Digits,yes&user_id=${userId}`);
+        }
+
+        // אם המשתמש בחר לצאת (הקיש סולמית או לא הקיש 1)
+        if (editMode === '') {
+            return res.status(200).send("id_list_message=t-תודה ולהתראות&hangup=yes");
+        }
+
+        // שלב 4: בקשת גיל (אם חדש או אם בחר לעדכן)
         if (!userAge) {
             return res.status(200).send(`read=t-נא הקש גיל ובסיומו סולמית=user_age,,3,0,Digits,yes&user_id=${userId}`);
         }
 
-        // שלב 4: עדכון או יצירה (Upsert)
+        // שלב 5: עדכון סופי ב-Airtable
         await upsertData(AIRTABLE_TOKEN, BASE_ID, TABLE_NAME, { phone, userId, userAge }, userRecordId);
 
-        // שלב 5: שליחת מייל עדכון
+        // שלב 6: שליחת מייל
         try {
-            const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: EMAIL_USER, pass: EMAIL_PASS } });
+            const transporter = nodemailer.createTransport({
+                host: "smtp.gmail.com",
+                port: 465,
+                secure: true, // שימוש ב-SSL
+                auth: { user: EMAIL_USER, pass: EMAIL_PASS }
+            });
+
             await transporter.sendMail({
-                from: EMAIL_USER,
+                from: `"מערכת רישום" <${EMAIL_USER}>`,
                 to: EMAIL_USER,
-                subject: `✅ ${userRecordId ? 'עדכון' : 'רישום'} חדש: ${userId}`,
+                subject: `🔔 ${userRecordId ? 'עדכון' : 'רישום'} חדש: ${userId}`,
                 text: `בוצע ${userRecordId ? 'עדכון' : 'רישום'}:\nת"ז: ${userId}\nגיל: ${userAge}\nטלפון: ${phone}`
             });
-        } catch (mailErr) {
-            console.error("Mail Error:", mailErr.message);
+        } catch (mErr) {
+            console.log("Mail Error Details:", mErr.message);
         }
 
-        // לוג הצלחה סופי
+        // לוג הצלחה
         await upsertData(AIRTABLE_TOKEN, BASE_ID, LOG_TABLE, { 
             phone, Action: "Success", Details: `ID: ${userId} Registered with age ${userAge}` 
         });
 
-        return res.status(200).send(`id_list_message=t-הנתונים נשמרו בהצלחה&hangup=yes`);
+        return res.status(200).send(`id_list_message=t-הנתונים עבור תעודת זהות.d-${userId}.t-נשמרו בהצלחה&hangup=yes`);
 
     } catch (error) {
         console.error("Global Error:", error.message);
